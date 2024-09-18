@@ -2,265 +2,153 @@ from .serializers import CountrySerializer, ManufacturerSerializer, CarSerialize
 from .models import Country, Manufacturer, Car, Comments
 import io
 from django.http import HttpResponse
-from openpyxl import Workbook
+from rest_framework.authentication import TokenAuthentication
 import csv
+from rest_framework import status 
+from django.http import HttpResponse
 from rest_framework.views import APIView
-import xlrd
-from rest_framework.generics import (ListAPIView, CreateAPIView, RetrieveUpdateDestroyAPIView)
-from openpyxl.utils import get_column_letter
-from io import StringIO 
-from rest_framework.authentication import SessionAuthentication
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+import pandas as pd
+from rest_framework.generics import (CreateAPIView, RetrieveUpdateDestroyAPIView)   
+from rest_framework.permissions import IsAuthenticated, AllowAny
 
 
-# Endpoint для просмотра записи модели Country
-class CountryListAPIView(ListAPIView):
-    permission_classes = (IsAuthenticated,)
-    authentication_classes = (SessionAuthentication,)
-    queryset = Country.objects.all()
-    serializer_class = CountrySerializer
 
+# Endpoint для экспорта данных в формате xlsx или csv
+class ExportXLSXandCSV(APIView):
+    def get(self,  model_name, format):
+        models = {
+            'Country': Country,
+            'Car': Car,
+            'Manufacturer': Manufacturer,
+            'Comments': Comments
+        }
 
-#Endpoint для создания записи модели Country
-class CountryCreateAPIView(CreateAPIView):
-    permission_classes = (IsAuthenticated,)
-    authentication_classes = (SessionAuthentication,) 
-    queryset = Country.objects.all()
-    serializer_class = CountrySerializer
+        if model_name not in models:
+            return Response({"detail": "Invalid model."}, status=400)
 
-#Endpoint для редактирования, обновления и удаления записи модели Country
-class CountryRetrieveUpdateDestroyAPIView(RetrieveUpdateDestroyAPIView):
-    permission_classes = (IsAuthenticated,)
-    authentication_classes = (SessionAuthentication,)
-    queryset = Country.objects.all()
-    serializer_class = CountrySerializer
+        model = models[model_name]
+        data = model.objects.all()
 
-# Endpoint для просмотра записи модели Manufacturer
-class ManufacturerListAPIView(ListAPIView):
-    queryset = Manufacturer.objects.all()
-    serializer_class = ManufacturerSerializer
+        fields = [field.name for field in model._meta.get_fields()]
 
-#Endpoint для создания записи модели Manufacturer
-class ManufacturerCreateAPIView(CreateAPIView):
-    permission_classes = (IsAuthenticated,)
-    authentication_classes = (SessionAuthentication,)
-    queryset = Manufacturer.objects.all()
-    serializer_class = ManufacturerSerializer
+        serialized_data = []
+        for obj in data:
+            obj_data = [getattr(obj, field) for field in fields]
+            serialized_data.append(obj_data)
 
-#Endpoint для редактирования, обновления и удаления записи модели Manufacturer
-class ManufacturerRetrieveUpdateDestroyAPIView(RetrieveUpdateDestroyAPIView):
-    permission_classes = (IsAuthenticated,)
-    authentication_classes = (SessionAuthentication,)
-    queryset = Manufacturer.objects.all()
-    serializer_class = ManufacturerSerializer
+        if format == 'xlsx':
+            df = pd.DataFrame(serialized_data, columns=fields)
+            response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            response['Content-Disposition'] = f'attachment; filename={model_name.lower()}_export.xlsx'
+            df.to_excel(response, engine='openpyxl', index=False)
+            return response
+        elif format == 'csv':
+            response = HttpResponse(content_type='text/csv')
+            response['Content-Disposition'] = f'attachment; filename={model_name.lower()}_export.csv'
+            writer = csv.writer(response)
+            writer.writerow(fields)
+            writer.writerows(serialized_data)
+            return response
+        
 
-# Endpoint для просмотра записи модели Car
-class CarListAPIView(ListAPIView):
-    queryset = Car.objects.all()
-    serializer_class = CarSerializer
+# Endpoint для просмотра записей модели
+class GetModelsData(APIView):
+    def get(self, request, model_name):
+        models = {
+            'Country': Country,
+            'Car': Car,
+            'Manufacturer': Manufacturer,
+            'Comments': Comments
+        }
 
-#Endpoint для создания записи модели Car
-class CarCreateAPIView(CreateAPIView):
-    permission_classes = (IsAuthenticated,)
-    authentication_classes = (SessionAuthentication,)
-    queryset = Car.objects.all()
-    serializer_class = CarSerializer
+        serializers = {
+            Country: CountrySerializer,
+            Car: CarSerializer,
+            Manufacturer: ManufacturerSerializer,
+           
+            Comments:  CommentsSerializer
+        }
+        model = models[model_name]
 
-#Endpoint для редактирования, обновления и удаления записи модели Car
-class CarRetrieveUpdateDestroyAPIView(RetrieveUpdateDestroyAPIView):
-    permission_classes = (IsAuthenticated,)
-    authentication_classes = (SessionAuthentication,)
-    queryset = Car.objects.all()
-    serializer_class = CarSerializer
+        queryset = model.objects.all()
+        serializer_class = serializers[model]
 
-# Endpoint для просмотра записи модели Comments
-class CommentsListAPIView(ListAPIView):
-    queryset = Comments.objects.all()
-    serializer_class = CommentsSerializer
-
-#Endpoint для создания записи модели Comments
-class CommentsCreateAPIView(CreateAPIView):
-    queryset = Comments.objects.all()
-    serializer_class = CommentsSerializer
-
-#Endpoint для редактирования, обновления и удаления записи модели Comments
-class CommentsRetrieveUpdateDestroyAPIView(RetrieveUpdateDestroyAPIView):
-    permission_classes = (IsAuthenticated,)
-    authentication_classes = (SessionAuthentication,)
-    queryset = Comments.objects.all()
-    serializer_class = CommentsSerializer
-
-class ExportCountryDataXlsxView(APIView):
-    def get(self, request):
-
-        countries = Country.objects.all()
-        serializer = CountrySerializer(countries, many=True)
-
-        wb = Workbook()
-        ws = wb.active
-        headers = ['ID', 'Название страны', 'Производители']
-        ws.append(headers)
-
-        for country_data in serializer.data:
-            manufacturers = ', '.join(country_data['manufacturers'])
-            ws.append([country_data['id'], country_data['name'], manufacturers])
-
-        file_buffer = io.BytesIO()
-        wb.save(file_buffer)
-        file_buffer.seek(0)
-
-        response = HttpResponse(file_buffer.read(),content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-        response['Content-Disposition'] = 'attachment; filename=country_export.xlsx'
-        return response
-
-class ExportManufacturerDataXlsxView(APIView):
-    def get(self, request):
-        manufacturers = Manufacturer.objects.all()
-        serializer = ManufacturerSerializer(manufacturers, many=True)
-
-        wb = Workbook()
-        ws = wb.active
-        headers = ['ID', 'Название производителя', 'Страна', 'Автомобили', 'Количество комментариев к автомобилям']
-        ws.append(headers)
-
-        for manufacturer_data in serializer.data:
-            country_name = manufacturer_data['country'] if 'country' in manufacturer_data else 'N/A'
-            cars = ','.join(car['name'] for car in manufacturer_data['cars'])
-            ws.append([manufacturer_data['id'], manufacturer_data['name'], country_name, cars, sum(car['comment_count'] for car in manufacturer_data['cars'])])
-
-        for col in range(1, ws.max_column + 1):
-            ws.column_dimensions[get_column_letter(col)].auto_size = True
-            ws.column_dimensions[get_column_letter(col)].bestFit = True
-
-        file_buffer = io.BytesIO()
-        wb.save(file_buffer)
-        file_buffer.seek(0)
-
-        response = HttpResponse(file_buffer.read(),content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-        response['Content-Disposition'] = 'attachment; filename=manufacturer_export.xlsx'
-        return response
+        serializer = serializer_class(queryset, many=True)
+        return Response(serializer.data) 
     
-class ExportCarDataXlsxView(APIView):
-    def get(self, request):
-        cars = Car.objects.all()
-        serializer = CarSerializer(cars, many=True)
 
-        wb = Workbook()
-        ws = wb.active
-
-        headers = ['ID', 'Название автомобиля', 'Производитель', 'Год начала выпуска', 'Год окончания выпуска', 'Количество комментариев']
-        ws.append(headers)
-
-        for car_data in serializer.data:
-            ws.append([car_data['id'],car_data['name'],car_data['manufacturer'],  car_data['yearOnRelease'],car_data['yearOfGraduation'],car_data['comment_count']])
-
-        file_buffer = io.BytesIO()
-        wb.save(file_buffer)
-        file_buffer.seek(0)
-
-        response = HttpResponse(file_buffer.read(),content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-        response['Content-Disposition'] = 'attachment; filename=car_export.xlsx'
-        return response
+# Endpoint для создания записи модели
+class CreateModelsData(CreateAPIView):
+    def get_serializer_class(self):
+        authentication_classes = [TokenAuthentication]
+        permission_classes = [IsAuthenticated]
+        model_name = self.kwargs.get('model_name')
+        models = {
+            'Country': Country,
+            'Car': Car,
+            'Manufacturer': Manufacturer,
+            'Comments': Comments
+        }
+        serializers = {
+            Country: CountrySerializer,
+            Car: CarSerializer,
+            Manufacturer: ManufacturerSerializer,
+            Comments: CommentsSerializer
+        }
+        model = models.get(model_name)
+        return serializers.get(model)
     
-class ExportCommentsDataXlsxView(APIView):
-    def get(self, request):
-        comments = Comments.objects.all()
-        serializer = CommentsSerializer(comments, many=True)
+    def get_permissions(self):
+        model_name = self.kwargs.get('model_name')
+        if model_name == 'Comments':
+            return [AllowAny()]
+        else:
+            return [IsAuthenticated()]
+        
+    def get(self, request, model_name):
+        models = {
+            'Country': Country,
+            'Car': Car,
+            'Manufacturer': Manufacturer,
+            'Comments': Comments
+        }
 
-        wb = Workbook()
-        ws = wb.active
-
-        headers = ['ID', 'Email', 'Автомобиль', 'Комментарий']
-        ws.append(headers)
-
-        for comment_data in serializer.data:
-            ws.append([comment_data['id'], comment_data['email'], comment_data['car'], comment_data['comment'], ])
-
-        file_buffer = io.BytesIO()
-        wb.save(file_buffer)
-        file_buffer.seek(0)
-
-        response = HttpResponse(file_buffer.read(),content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-        response['Content-Disposition'] = 'attachment; filename=comments_export.xlsx'
-        return response
+        serializer = self.get_serializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
-class ExportCountryDataCSVView(APIView):
-    def get(self, request):
-        countries = Country.objects.all()
 
-        response = HttpResponse(content_type='text/csv')
-        response['Content-Disposition'] = 'attachment; filename="countries.csv"'
+# Endpoint для просмотра, обновления и удаления записи модели 
+class RetrieveUpdateDestroyData(RetrieveUpdateDestroyAPIView):
+    def get_serializer_class(self):
+        authentication_classes = [TokenAuthentication]
+        permission_classes = [IsAuthenticated]
+        model_name = self.kwargs.get('model_name')
+        models = {
+            'Country': Country,
+            'Car': Car,
+            'Manufacturer': Manufacturer,
+            'Comments': Comments
+        }
+        serializers = {
+            Country: CountrySerializer,
+            Car: CarSerializer,
+            Manufacturer: ManufacturerSerializer,
+            Comments: CommentsSerializer
+        }
+        model = models.get(model_name)
+        return serializers.get(model)
 
-        csv_buffer = StringIO()
-        writer = csv.writer(csv_buffer)
-
-        writer.writerow(['ID', 'Название страны'])
-
-        for country in countries:
-            writer.writerow([country.id, country.name])
-
-        csv_data = csv_buffer.getvalue().encode('utf-8')
-
-        response.write(csv_data)
-        return response
-    
-class ExportManufaturerDataCSVView(APIView):
-    def get(self, request):
-        manufacturers = Manufacturer.objects.all()
-
-        response = HttpResponse(content_type='text/csv')
-        response['Content-Disposition'] = 'attachment; filename="manufacturers.csv"'
-
-        csv_buffer = StringIO()
-        writer = csv.writer(csv_buffer)
-
-        writer.writerow(['ID', 'Производитель', 'Страна'])
-
-        for manufacturer in manufacturers:
-            writer.writerow([manufacturer.id,  manufacturer.name,  manufacturer.country.name ])
-
-        csv_data = csv_buffer.getvalue().encode('utf-8')
-
-        response.write(csv_data)
-
-        return response
-    
-class ExportCarDataCSVView(APIView):
-    def get(self, request):
-        cars = Car.objects.all()
-        serializer = CarSerializer(cars, many=True)
-
-        response = HttpResponse(content_type='text/csv')
-        response['Content-Disposition'] = 'attachment; filename="cars.csv"'
-
-        csv_buffer = StringIO()
-        writer = csv.writer(csv_buffer)
-
-        writer.writerow(['ID', 'Автомобиль', 'Производитель', 'Год начала выпуска', 'Год окончания выпуска', 'Количество комментариев'])
-
-        for car_data in serializer.data:
-            writer.writerow([car_data['id'], car_data['name'], car_data['manufacturer']['name'], car_data['yearOnRelease'], car_data['yearOfGraduation'], car_data['comment_count'],])
-
-        csv_data = csv_buffer.getvalue().encode('utf-8')
-        response.write(csv_data)
-        return response
-    
-class ExportCommentDataCSVView(APIView):
-    def get(self, request):
-        comments = Comments.objects.all()
-        serializer = CommentsSerializer(comments, many=True)
-
-        response = HttpResponse(content_type='text/csv')
-        response['Content-Disposition'] = 'attachment; filename="comments.csv"'
-
-        csv_buffer = StringIO()
-        writer = csv.writer(csv_buffer)
-
-        writer.writerow(['ID', 'Email', 'Автомобиль', 'Комментарий', 'Производитель'])
-
-        for comment_data in serializer.data:
-            writer.writerow([comment_data['id'], comment_data['email'], comment_data['car'], comment_data['comment'], comment_data['manufacturer'],])
-
-        csv_data = csv_buffer.getvalue().encode('utf-8')
-        response.write(csv_data)
-        return response
+    def get_queryset(self):
+        model_name = self.kwargs.get('model_name')
+        models = {
+            'Country': Country,
+            'Car': Car,
+            'Manufacturer': Manufacturer,
+            'Comments': Comments
+        }
+        model = models.get(model_name)
+        return model.objects.all()
